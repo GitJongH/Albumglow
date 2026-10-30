@@ -1,0 +1,29 @@
+{
+  "manifest_version": 3,
+  "name": "Albumglow",
+  "version": "1.0.0",
+  "description": "유튜브 뮤직을 애플 뮤직 스타일(앨범 색 그라데이션 + 유리 UI)로 바꿔 줍니다.",
+  "icons": { "16": "icons/icon16.png", "48": "icons/icon48.png", "128": "icons/icon128.png" },
+  "minimum_chrome_version": "111",
+  "permissions": ["storage"],
+  "content_scripts": [
+    {
+      "matches": ["https://music.youtube.com/*"],
+      "css": ["content/theme.css"],
+      "js": ["content/content.js"],
+      "run_at": "document_start"
+    }
+  ],
+  "background": { "service_worker": "background.js" },
+  "action": {
+    "default_title": "Albumglow",
+    "default_icon": { "16": "icons/icon16.png", "48": "icons/icon48.png" },
+    "default_popup": "popup/popup.html"
+  },
+  "commands": {
+    "toggle-theme": {
+      "suggested_key": { "default": "Alt+Shift+Y" },
+      "description": "테마 켜기/끄기"
+    }
+  }
+}
