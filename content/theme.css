@@ -14,14 +14,9 @@ html.ym-theme-on {
   background: var(--ym-base) !important;
 
   /* 유튜브 뮤직 자체 색 변수 덮어쓰기 */
-  --ytmusic-general-background-a: transparent;
-  --ytmusic-general-background-b: transparent;
-  --ytmusic-general-background-c: transparent;
-  --ytmusic-background: transparent;
   --ytmusic-nav-bar-background: var(--ym-glass);
   --ytmusic-player-bar-background: var(--ym-glass);
   --ytmusic-search-background: rgba(255, 255, 255, 0.12);
-  --ytmusic-brand-background-solid: transparent;
   --paper-slider-active-color: var(--ym-accent);
   --paper-slider-knob-color: var(--ym-accent);
   --paper-slider-knob-start-color: var(--ym-accent);
