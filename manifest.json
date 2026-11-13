@@ -12,6 +12,11 @@
       "css": ["content/theme.css"],
       "js": ["content/content.js"],
       "run_at": "document_start"
+    },
+    {
+      "matches": ["https://music.youtube.com/*"],
+      "js": ["content/page.js"],
+      "world": "MAIN"
     }
   ],
   "background": { "service_worker": "background.js" },

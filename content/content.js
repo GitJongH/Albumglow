@@ -10,6 +10,7 @@
     sidePanel: 'ytmusic-player-page #side-panel',
     sideTabs: 'ytmusic-player-page tp-yt-paper-tab', // 다음 트랙, 가사, 댓글, 관련 항목 순. 가사가 없으면 [1] 이 disabled
     video: 'video',
+    progress: 'ytmusic-player-bar #progress-bar', // aria-valuemax = 곡 길이(초)
   };
 
   const DEFAULTS = { enabled: true, preset: 'apple', blur: 30, intensity: 70, accent: '#fa233b', lyrics: true };
@@ -76,8 +77,16 @@
     const video = document.querySelector(SEL.video);
     if (!video || !isFinite(line?.t)) return; // 시간 정보 없는 가사는 이동할 곳이 없다
     pauseScrollUntil = 0;
-    video.currentTime = Math.max(0, line.t + lyricOffset);
+    video.currentTime = Math.max(0, line.t + lyricOffset) + timeBase();
   });
+
+  // 곡의 실제 위치와 길이. 곡이 자동으로 넘어가면 유튜브가 다음 곡을 같은 버퍼에 이어 붙여서
+  // video.currentTime/duration 은 곡 기준이 아니게 된다(예: 화면은 0:08, currentTime 은 225초, duration 은 계속 늘어남).
+  // 위치: page.js 가 <html data-ym-time-base> 에 적어 주는 차이를 뺀다. 길이: 진행 막대의 최댓값을 쓴다.
+  const timeBase = () => Number(root.dataset.ymTimeBase) || 0;
+  const songDuration = () => Number(document.querySelector(SEL.progress)?.getAttribute('aria-valuemax')) || 0;
+  let pickedDuration = 0;
+  let retriedKey = ''; // 조회 실패로 이미 한 번 다시 시도한 곡
 
   function nudgeOffset(step) {
     lyricOffset = Math.round((lyricOffset + step) * 10) / 10;
@@ -100,7 +109,7 @@
 
   // 곡 길이가 2초 넘게 다르면 다른 버전으로 본다. 길이를 아직 모르면 통과.
   function fitsDuration(x) {
-    const duration = document.querySelector(SEL.video)?.duration;
+    const duration = songDuration();
     return !duration || Math.abs(x.duration - duration) <= 2;
   }
 
@@ -108,11 +117,16 @@
   // 넷 중 하나꼴(측정 0.28)이고 영어·스페인어·프랑스어·독일어 가사는 0.04 이하라 0.12 로 가른다.
   // shortcut: 한국어 로마자만 거른다. 일본어 로마자 가사가 문제 되면 기준을 따로 추가할 것.
   function isRomanizedKorean(text) {
+    // 한글이 충분하면 원래 표기다: 섞여 있는 영어 낱말 몇 개("Romeo" 등)만 보고 버리지 않는다.
+    if ((text.match(/[가-힣]/g) || []).length > 20) return false;
     const words = text.toLowerCase().match(/[a-z']+/g) || [];
-    return words.length >= 10 && words.filter((w) => w.includes('eo')).length / words.length > 0.12;
+    const eo = words.filter((w) => w.includes('eo'));
+    // 서로 다른 낱말이 5개 이상이어야 한다: 영어 가사는 "people" 같은 한두 낱말만 되풀이한다.
+    return eo.length / words.length > 0.12 && new Set(eo).size >= 5;
   }
   console.assert(isRomanizedKorean('neo eodi geoul meoreo seoro neomu gieok eopseo deo keojyeo')
-    && !isRomanizedKorean('people say the video of someone is on the radio every single night'));
+    && !isRomanizedKorean('people say the video of someone is on the radio every single night')
+    && !isRomanizedKorean(`${'가'.repeat(21)} oh my romeo romeo romeo come on baby say yeah now`));
 
   async function searchLrclib(params) {
     // 곡 제목·가수만 보낸다. 쿠키와 현재 페이지 주소(referrer)는 보내지 않는다.
@@ -120,21 +134,22 @@
       credentials: 'omit',
       referrerPolicy: 'no-referrer',
     });
-    if (!res.ok) return [];
+    if (!res.ok) throw new Error(`LRCLIB ${res.status}`); // 일시적 오류는 refreshLyrics 가 한 번 다시 시도한다
     return (await res.json()).filter((x) => {
       const text = x.syncedLyrics || x.plainLyrics;
       return text && !isRomanizedKorean(text);
     });
   }
 
-  // 받아 둔 결과에서 지금 곡 길이에 맞는 가사를 고른다. 광고가 끝나 길이가 바뀌면 다시 고른다.
+  // 받아 둔 결과에서 지금 곡 길이에 맞는 가사를 고른다. 광고가 끝나는 등 길이가 바뀌면 tickLyrics 가 다시 부른다.
+  // 시간 정보가 있는 가사를 먼저 쓰고, 없으면 일반 가사(가사 탭이 회색인 곡에서만 보여 준다)로 물러난다.
+  const chooseHit = (fits) => fits.find((x) => x.syncedLyrics) || fits[0] || null;
+  console.assert(chooseHit([{ plainLyrics: 'a' }, { syncedLyrics: 'b' }]).syncedLyrics === 'b'
+    && chooseHit([{ plainLyrics: 'a' }]).plainLyrics === 'a' && chooseHit([]) === null);
+
   function pickLyrics() {
-    // 한번 고른 가사는 곡이 바뀔 때까지 유지한다: 곡 끝 무렵 유튜브가 다음 곡을 미리 이어 붙여
-    // video.duration 이 늘어나므로, 그때 다시 고르면 가사가 사라진다.
-    // 시간 정보가 있는 가사를 먼저 쓰고, 없으면 일반 가사(가사 탭이 회색인 곡에서만 보여 준다)로 물러난다.
-    const kept = lyricHits.includes(lyricHit) ? lyricHit : null;
-    const fits = lyricHits.filter(fitsDuration);
-    const hit = kept?.syncedLyrics ? kept : fits.find((x) => x.syncedLyrics) || kept || fits[0] || null;
+    pickedDuration = songDuration();
+    const hit = chooseHit(lyricHits.filter(fitsDuration));
     if (hit === lyricHit) return;
     lyricHit = hit;
     lyricLines = hit && (hit.syncedLyrics
@@ -143,13 +158,13 @@
     renderLyrics();
     tickLyrics(); // 다음 주기를 기다리지 않고 바로 붙인다
   }
-  document.addEventListener('durationchange', pickLyrics, true); // 미디어 이벤트는 버블링이 없어 캡처로 받는다
 
   function renderLyrics() {
     activeIdx = -1;
     if (!lyricLines) return lyricBox.remove();
-    const els = lyricLines.map((l) => Object.assign(document.createElement('p'), { textContent: l.text }));
     const synced = !!lyricHit.syncedLyrics;
+    // 시간 정보가 있는 줄은 눌러서 이동할 수 있으니 키보드로도 닿게 한다.
+    const els = lyricLines.map((l) => Object.assign(document.createElement('p'), { textContent: l.text }, synced && { role: 'button', tabIndex: 0 }));
     lyricBox.classList.toggle('plain', !synced);
     const foot = Object.assign(document.createElement('small'), { textContent: synced ? '가사 싱크: LRCLIB' : '가사: LRCLIB' });
     if (synced) {
@@ -186,8 +201,19 @@
     });
     // 바로 조회하고, 첫 조회에서 맞는 가사가 나오면 곧장 띄운다. 없을 때만 넓은 검색을 한 번 더 한다.
     for (const params of [{ track_name: title, artist_name: artist }, { q: `${title} ${artist}` }]) {
-      const hits = await searchLrclib(params).catch(() => []);
+      const hits = await searchLrclib(params).catch(() => null);
       if (key !== lyricKey) return;
+      if (!hits) {
+        // 일시적 오류일 수 있으니 곡마다 한 번만 3초 뒤에 다시 조회한다.
+        // 키는 3초 뒤에 비운다: 바로 비우면 그사이 플레이어 바 변화가 재시도를 앞당겨 써 버린다.
+        if (retriedKey === key) return;
+        retriedKey = key;
+        return void setTimeout(() => {
+          if (lyricKey !== key) return; // 그사이 곡이 바뀌었으면 그만둔다
+          lyricKey = '';
+          refreshLyrics();
+        }, 3000);
+      }
       lyricHits = lyricHits.concat(hits);
       pickLyrics();
       if (lyricHit?.syncedLyrics) return;
@@ -201,12 +227,21 @@
     const songMode = !document.querySelector(SEL.playerPage)?.hasAttribute('video-mode');
     // 회색 탭은 노래 탭일 때만 살린다: 동영상은 길이·타이밍이 음원과 달라 가사가 어긋난다.
     const live = !!lyricLines && grey && songMode;
-    panelOpen &&= live;
+    // 가사가 잠깐 비는 곡 전환 때는 panelOpen 을 지우지 않는다: 회색 탭 곡이 이어지면 패널이 열린 채로 간다.
+    // 유튜브 가사가 있는 곡이 끼면 지운다: 그 뒤의 회색 탭 곡에서 패널이 저절로 다시 뜨지 않게.
+    if (!grey) panelOpen = false;
+    const open = panelOpen && live;
     tab?.classList.toggle('ym-tab-live', live);
-    tab?.classList.toggle('ym-tab-on', panelOpen);
-    if (!panelOpen) lyricPanel.remove();
+    tab?.classList.toggle('ym-tab-on', open);
+    // 회색 탭은 유튜브가 aria-disabled/tabindex=-1 로 막아 둔다. 살린 동안은 키보드·낭독기에도 열어 준다.
+    // (회색이 아닌 탭은 유튜브가 관리하므로 건드리지 않는다. 값이 같으면 다시 쓰지 않아 변경 알림을 만들지 않는다.)
+    if (grey && tab.getAttribute('aria-disabled') !== String(!live)) {
+      tab.setAttribute('aria-disabled', String(!live));
+      tab.tabIndex = live ? 0 : -1;
+    }
+    if (!open) lyricPanel.remove();
     else if (!lyricPanel.isConnected) document.querySelector(SEL.sidePanel)?.append(lyricPanel);
-    if (live) return panelOpen ? lyricPanel : null;
+    if (live) return open ? lyricPanel : null;
     // 가사 탭은 열 때 만들어지므로 매번 확인. 이전 곡의 가사 화면이 남아 있을 수 있어 회색이면 쓰지 않는다.
     return lyricHit?.syncedLyrics && !grey ? document.querySelector(SEL.lyricsShelf) : null;
   }
@@ -219,7 +254,17 @@
     tickLyrics();
   }, true);
 
+  // 키보드: 살려 둔 가사 탭과 가사 줄을 Enter/Space 로 누른다. (유튜브는 비활성 탭의 키 입력을 무시한다.)
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    const target = e.target.closest?.(`${SEL.sideTabs}.ym-tab-live, .ym-lyrics p[role="button"]`);
+    if (!target) return;
+    e.preventDefault(); // Space 로 화면이 내려가지 않게
+    target.click();
+  }, true);
+
   function tickLyrics() {
+    if (songDuration() !== pickedDuration) pickLyrics(); // 곡 길이가 바뀌었으면(광고 → 곡 등) 맞는 가사를 다시 고른다
     const host = lyricsHost();
     if (!host) return lyricBox.remove(); // 보여 줄 자리가 없으면 이전 곡 가사 화면에 남지 않게 뗀다
     if (lyricBox.parentNode !== host) {
@@ -228,7 +273,7 @@
       activeIdx = -1; // 새로 붙였으니 현재 줄을 다시 잡아 그 위치로 스크롤한다
     }
     lyricBox.classList.toggle('browsing', Date.now() < pauseScrollUntil); // 넘겨 보는 동안은 블러를 푼다
-    const t = (document.querySelector(SEL.video)?.currentTime ?? 0) - lyricOffset;
+    const t = (document.querySelector(SEL.video)?.currentTime ?? 0) - timeBase() - lyricOffset;
     const i = lyricLines.findLastIndex((l) => l.t <= t);
     if (i === activeIdx) return;
     lyricBox.children[activeIdx]?.classList.remove('active');

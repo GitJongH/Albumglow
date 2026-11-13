@@ -71,6 +71,7 @@ manifest.json        MV3 매니페스트
 background.js        단축키 처리 (서비스 워커)
 content/theme.css    테마 스타일 (CSS 변수 기반)
 content/content.js   앨범 색 추출, 가사 따라가기, 설정 반영
+content/page.js      유튜브 플레이어의 실제 곡 위치를 content.js 에 알려 줌 (페이지 세계에서 실행)
 popup/               툴바 팝업 (프리셋·슬라이더)
 icons/               아이콘
 scripts/package.ps1  배포용 ZIP 만들기

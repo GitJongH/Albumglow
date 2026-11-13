@@ -204,6 +204,15 @@ html.ym-theme-on .ym-lyrics p:hover {
   --ym-line-blur: 0px !important;
 }
 
+/* 키보드로 옮겨 다닐 때 어느 줄·탭에 있는지 보이게 */
+html.ym-theme-on .ym-lyrics p:focus-visible,
+html.ym-theme-on ytmusic-player-page tp-yt-paper-tab.ym-tab-live:focus-visible {
+  outline: 2px solid var(--ym-accent);
+  outline-offset: 4px;
+  border-radius: 4px;
+  --ym-line-blur: 0px !important;
+}
+
 html.ym-theme-on .ym-lyrics p.active {
   color: #fff;
   transform: scale(1.05);
