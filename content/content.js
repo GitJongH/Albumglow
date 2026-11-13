@@ -44,9 +44,27 @@
 
   let lyricLines = null; // [{ t: 초, text }], 없으면 유튜브 원래 가사를 그대로 둔다
   let lyricKey = '';
+  let lyricHits = []; // 현재 곡의 LRCLIB 검색 결과 (시간 가사가 있는 것만)
+  let lyricHit = null;
   let activeIdx = -1;
+  let pauseScrollUntil = 0;
   const lyricBox = document.createElement('div');
   lyricBox.className = 'ym-lyrics';
+
+  // 직접 가사를 넘겨 보는 동안은 현재 줄로 끌어가지 않는다.
+  // shortcut: 휠과 터치만 감지한다. 스크롤바를 끌 때도 멈추게 하려면 스크롤 컨테이너의 scroll 이벤트로 바꿀 것.
+  const pauseScroll = () => { pauseScrollUntil = Date.now() + 3000; };
+  lyricBox.addEventListener('wheel', pauseScroll, { passive: true });
+  lyricBox.addEventListener('touchmove', pauseScroll, { passive: true });
+
+  // 줄을 누르면 그 위치로 이동
+  lyricBox.addEventListener('click', (e) => {
+    const line = lyricLines?.[[...lyricBox.children].indexOf(e.target)];
+    const video = document.querySelector(SEL.video);
+    if (!line || !video) return;
+    pauseScrollUntil = 0;
+    video.currentTime = line.t;
+  });
 
   function parseLrc(lrc) {
     const out = [];
@@ -58,19 +76,33 @@
   }
   console.assert(parseLrc('[01:02.50] a\nx\n[01:03.00]').map((l) => l.t + l.text).join() === '62.5a,63♪');
 
-  async function fetchLyrics(title, artist, duration) {
-    const pick = (list) => list.find((x) => x.syncedLyrics && (!duration || Math.abs(x.duration - duration) <= 2));
-    for (const params of [{ track_name: title, artist_name: artist }, { q: `${title} ${artist}` }]) {
-      // 곡 제목·가수만 보낸다. 쿠키와 현재 페이지 주소(referrer)는 보내지 않는다.
-      const res = await fetch(`https://lrclib.net/api/search?${new URLSearchParams(params)}`, {
-        credentials: 'omit',
-        referrerPolicy: 'no-referrer',
-      });
-      const hit = res.ok && pick(await res.json());
-      if (hit) return parseLrc(hit.syncedLyrics);
-    }
-    return null;
+  // 곡 길이가 2초 넘게 다르면 다른 버전으로 본다. 길이를 아직 모르면 통과.
+  function fitsDuration(x) {
+    const duration = document.querySelector(SEL.video)?.duration;
+    return !duration || Math.abs(x.duration - duration) <= 2;
   }
+
+  async function searchLrclib(params) {
+    // 곡 제목·가수만 보낸다. 쿠키와 현재 페이지 주소(referrer)는 보내지 않는다.
+    const res = await fetch(`https://lrclib.net/api/search?${new URLSearchParams(params)}`, {
+      credentials: 'omit',
+      referrerPolicy: 'no-referrer',
+    });
+    return res.ok ? (await res.json()).filter((x) => x.syncedLyrics) : [];
+  }
+
+  // 받아 둔 결과에서 지금 곡 길이에 맞는 가사를 고른다. 광고가 끝나 길이가 바뀌면 다시 고른다.
+  function pickLyrics() {
+    // 한번 고른 가사는 곡이 바뀔 때까지 유지한다: 곡 끝 무렵 유튜브가 다음 곡을 미리 이어 붙여
+    // video.duration 이 늘어나므로, 그때 다시 고르면 가사가 사라진다.
+    const hit = lyricHits.includes(lyricHit) ? lyricHit : lyricHits.find(fitsDuration) || null;
+    if (hit === lyricHit) return;
+    lyricHit = hit;
+    lyricLines = hit && parseLrc(hit.syncedLyrics);
+    renderLyrics();
+    tickLyrics(); // 다음 주기를 기다리지 않고 바로 붙인다
+  }
+  document.addEventListener('durationchange', pickLyrics, true); // 미디어 이벤트는 버블링이 없어 캡처로 받는다
 
   function renderLyrics() {
     activeIdx = -1;
@@ -85,18 +117,17 @@
     const key = settings.enabled && settings.lyrics && title ? `${title}|${artist}` : '';
     if (key === lyricKey) return;
     lyricKey = key;
-    lyricLines = null;
-    renderLyrics();
+    lyricHits = [];
+    pickLyrics();
     if (!key) return;
-    // shortcut: 곡 길이를 1초 뒤 video 에서 읽는다. 광고 중이거나 아직 이전 곡 길이면 매칭에 실패해
-    // 원래 가사가 보인다. 자주 겪으면 durationchange 를 기다렸다가 다시 조회하도록 바꿀 것.
-    await new Promise((r) => setTimeout(r, 1000));
-    if (key !== lyricKey) return;
-    const duration = document.querySelector(SEL.video)?.duration;
-    const lines = await fetchLyrics(title, artist, duration).catch(() => null);
-    if (key !== lyricKey) return;
-    lyricLines = lines;
-    renderLyrics();
+    // 바로 조회하고, 첫 조회에서 맞는 가사가 나오면 곧장 띄운다. 없을 때만 넓은 검색을 한 번 더 한다.
+    for (const params of [{ track_name: title, artist_name: artist }, { q: `${title} ${artist}` }]) {
+      const hits = await searchLrclib(params).catch(() => []);
+      if (key !== lyricKey) return;
+      lyricHits = lyricHits.concat(hits);
+      pickLyrics();
+      if (lyricHit) return;
+    }
   }
 
   function tickLyrics() {
@@ -111,7 +142,7 @@
     const el = i >= 0 && lyricBox.children[i];
     if (!el) return;
     el.classList.add('active');
-    if (lyricBox.offsetParent) el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    if (lyricBox.offsetParent && Date.now() > pauseScrollUntil) el.scrollIntoView({ block: 'center', behavior: 'smooth' });
   }
   setInterval(tickLyrics, 250);
 
