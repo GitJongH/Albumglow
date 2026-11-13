@@ -159,6 +159,36 @@ html.ym-theme-on ytmusic-description-shelf-renderer {
   box-sizing: border-box;
 }
 
+/* 가사 따라가기: 우리 가사(.ym-lyrics)가 붙으면 유튜브 원래 가사를 숨긴다 */
+html.ym-theme-on ytmusic-description-shelf-renderer:has(> .ym-lyrics) > :not(.ym-lyrics) {
+  display: none !important;
+}
+
+/* 마지막 줄도 가운데로 올 수 있게 아래를 비운다 */
+html.ym-theme-on .ym-lyrics {
+  padding-bottom: 40vh;
+  font-family: var(--ym-font);
+}
+
+html.ym-theme-on .ym-lyrics p {
+  margin: 0 0 18px;
+  font-size: 20px;
+  line-height: 1.5;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: rgba(255, 255, 255, 0.32);
+  transition: color 0.3s ease;
+}
+
+html.ym-theme-on .ym-lyrics p.active {
+  color: #fff;
+}
+
+html.ym-theme-on .ym-lyrics small {
+  font-size: 12px;
+  opacity: 0.5;
+}
+
 html.ym-theme-on ytmusic-description-shelf-renderer .footer {
   font-size: 12px;
   opacity: 0.5;

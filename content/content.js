@@ -3,9 +3,13 @@
   const SEL = {
     playerBar: 'ytmusic-player-bar',
     thumb: 'ytmusic-player-bar img.image',
+    title: 'ytmusic-player-bar .title',
+    byline: 'ytmusic-player-bar .byline',
+    lyricsShelf: 'ytmusic-player-page ytmusic-description-shelf-renderer',
+    video: 'video',
   };
 
-  const DEFAULTS = { enabled: true, preset: 'apple', blur: 30, intensity: 70, accent: '#fa233b' };
+  const DEFAULTS = { enabled: true, preset: 'apple', blur: 30, intensity: 70, accent: '#fa233b', lyrics: true };
 
   // dynamic: 앨범 색을 배경에 쓸지 여부. static 프리셋은 c1/c2 고정.
   const PRESETS = {
@@ -33,7 +37,83 @@
     root.style.setProperty('--ym-base', preset.base);
     root.style.setProperty('--ym-c1', colors.c1);
     root.style.setProperty('--ym-c2', colors.c2);
+    refreshLyrics();
   }
+
+  // ---- 가사 따라가기 (시간 정보는 LRCLIB 에서 받는다) ----
+
+  let lyricLines = null; // [{ t: 초, text }], 없으면 유튜브 원래 가사를 그대로 둔다
+  let lyricKey = '';
+  let activeIdx = -1;
+  const lyricBox = document.createElement('div');
+  lyricBox.className = 'ym-lyrics';
+
+  function parseLrc(lrc) {
+    const out = [];
+    for (const row of lrc.split('\n')) {
+      const m = row.match(/^\[(\d+):(\d+(?:\.\d+)?)\]\s*(.*)$/);
+      if (m) out.push({ t: m[1] * 60 + Number(m[2]), text: m[3].trim() || '♪' });
+    }
+    return out;
+  }
+  console.assert(parseLrc('[01:02.50] a\nx\n[01:03.00]').map((l) => l.t + l.text).join() === '62.5a,63♪');
+
+  async function fetchLyrics(title, artist, duration) {
+    const pick = (list) => list.find((x) => x.syncedLyrics && (!duration || Math.abs(x.duration - duration) <= 2));
+    for (const params of [{ track_name: title, artist_name: artist }, { q: `${title} ${artist}` }]) {
+      // 곡 제목·가수만 보낸다. 쿠키와 현재 페이지 주소(referrer)는 보내지 않는다.
+      const res = await fetch(`https://lrclib.net/api/search?${new URLSearchParams(params)}`, {
+        credentials: 'omit',
+        referrerPolicy: 'no-referrer',
+      });
+      const hit = res.ok && pick(await res.json());
+      if (hit) return parseLrc(hit.syncedLyrics);
+    }
+    return null;
+  }
+
+  function renderLyrics() {
+    activeIdx = -1;
+    if (!lyricLines) return lyricBox.remove();
+    const els = lyricLines.map((l) => Object.assign(document.createElement('p'), { textContent: l.text }));
+    lyricBox.replaceChildren(...els, Object.assign(document.createElement('small'), { textContent: '가사 싱크: LRCLIB' }));
+  }
+
+  async function refreshLyrics() {
+    const title = document.querySelector(SEL.title)?.textContent.trim();
+    const artist = document.querySelector(SEL.byline)?.textContent.split('•')[0].trim() || '';
+    const key = settings.enabled && settings.lyrics && title ? `${title}|${artist}` : '';
+    if (key === lyricKey) return;
+    lyricKey = key;
+    lyricLines = null;
+    renderLyrics();
+    if (!key) return;
+    // shortcut: 곡 길이를 1초 뒤 video 에서 읽는다. 광고 중이거나 아직 이전 곡 길이면 매칭에 실패해
+    // 원래 가사가 보인다. 자주 겪으면 durationchange 를 기다렸다가 다시 조회하도록 바꿀 것.
+    await new Promise((r) => setTimeout(r, 1000));
+    if (key !== lyricKey) return;
+    const duration = document.querySelector(SEL.video)?.duration;
+    const lines = await fetchLyrics(title, artist, duration).catch(() => null);
+    if (key !== lyricKey) return;
+    lyricLines = lines;
+    renderLyrics();
+  }
+
+  function tickLyrics() {
+    const shelf = lyricLines && document.querySelector(SEL.lyricsShelf);
+    if (!shelf) return;
+    if (lyricBox.parentNode !== shelf) shelf.append(lyricBox); // 가사 탭은 열 때 만들어지므로 매번 확인
+    const t = document.querySelector(SEL.video)?.currentTime ?? 0;
+    const i = lyricLines.findLastIndex((l) => l.t <= t);
+    if (i === activeIdx) return;
+    lyricBox.children[activeIdx]?.classList.remove('active');
+    activeIdx = i;
+    const el = i >= 0 && lyricBox.children[i];
+    if (!el) return;
+    el.classList.add('active');
+    if (lyricBox.offsetParent) el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  }
+  setInterval(tickLyrics, 250);
 
   // ---- 앨범 아트에서 대표색 추출 ----
 
@@ -126,7 +206,7 @@
   function watchPlayerBar() {
     const bar = document.querySelector(SEL.playerBar);
     if (!bar) return false;
-    new MutationObserver(refreshColors).observe(bar, {
+    new MutationObserver(() => { refreshColors(); refreshLyrics(); }).observe(bar, {
       subtree: true,
       childList: true,
       attributes: true,

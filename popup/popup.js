@@ -1,9 +1,10 @@
-const DEFAULTS = { enabled: true, preset: 'apple', blur: 30, intensity: 70, accent: '#fa233b' };
+const DEFAULTS = { enabled: true, preset: 'apple', blur: 30, intensity: 70, accent: '#fa233b', lyrics: true };
 
 const $ = (id) => document.getElementById(id);
 
 function render(s) {
   $('enabled').checked = s.enabled;
+  $('lyrics').checked = s.lyrics;
   $('blur').value = s.blur;
   $('intensity').value = s.intensity;
   $('accent').value = s.accent;
@@ -21,6 +22,7 @@ function save(patch) {
 }
 
 $('enabled').addEventListener('change', (e) => save({ enabled: e.target.checked }));
+$('lyrics').addEventListener('change', (e) => save({ lyrics: e.target.checked }));
 $('blur').addEventListener('input', (e) => save({ blur: Number(e.target.value) }));
 $('intensity').addEventListener('input', (e) => save({ intensity: Number(e.target.value) }));
 $('accent').addEventListener('input', (e) => save({ accent: e.target.value }));
