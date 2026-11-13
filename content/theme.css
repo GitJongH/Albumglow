@@ -177,21 +177,104 @@ html.ym-theme-on .ym-lyrics p {
   font-weight: 700;
   letter-spacing: -0.01em;
   color: rgba(255, 255, 255, 0.32);
-  transition: color 0.3s ease;
+  --ym-line-blur: 2.4px;
+  transform-origin: left center;
+  transition: color 0.4s ease, filter 0.4s ease, transform 0.4s ease;
   cursor: pointer;
+}
+
+/* 현재 줄에서 멀수록 흐리게: 바로 옆 줄, 두 칸 옆 줄, 그 밖 */
+html.ym-theme-on .ym-lyrics p.active + p,
+html.ym-theme-on .ym-lyrics p:has(+ p.active) {
+  --ym-line-blur: 0.7px;
+}
+
+html.ym-theme-on .ym-lyrics p.active + p + p,
+html.ym-theme-on .ym-lyrics p:has(+ p + p.active) {
+  --ym-line-blur: 1.5px;
+}
+
+/* 직접 넘겨 보는 중(.browsing)이거나 전주처럼 현재 줄이 없을 때는 흐리지 않는다 */
+html.ym-theme-on .ym-lyrics:has(p.active):not(.browsing) p:not(.active) {
+  filter: blur(var(--ym-line-blur));
 }
 
 html.ym-theme-on .ym-lyrics p:hover {
   color: rgba(255, 255, 255, 0.6);
+  --ym-line-blur: 0px !important;
 }
 
 html.ym-theme-on .ym-lyrics p.active {
   color: #fff;
+  transform: scale(1.05);
+}
+
+/* 시간 정보 없는 가사: 강조·이동이 없으니 전체를 읽기 좋게 밝게 둔다 */
+html.ym-theme-on .ym-lyrics.plain p,
+html.ym-theme-on .ym-lyrics.plain p:hover {
+  color: rgba(255, 255, 255, 0.92);
+  cursor: default;
+}
+
+/* 유튜브에 가사가 없는 곡: 회색 가사 탭을 살리고(.ym-tab-live), 누르면 탭 내용 자리에 우리 패널을 띄운다(.ym-tab-on) */
+html.ym-theme-on ytmusic-player-page tp-yt-paper-tab.ym-tab-live {
+  pointer-events: auto !important;
+  cursor: pointer !important;
+  color: rgba(255, 255, 255, 0.7) !important;
+}
+
+/* 패널이 떠 있는 동안은 유튜브가 선택해 둔 탭의 강조와 밑줄을 끄고 가사 탭을 선택된 것처럼 보이게 한다 */
+html.ym-theme-on ytmusic-player-page tp-yt-paper-tabs:has(.ym-tab-on) tp-yt-paper-tab.iron-selected {
+  color: rgba(255, 255, 255, 0.7) !important;
+}
+
+html.ym-theme-on ytmusic-player-page tp-yt-paper-tabs:has(.ym-tab-on) #selectionBar {
+  visibility: hidden;
+}
+
+html.ym-theme-on ytmusic-player-page tp-yt-paper-tab.ym-tab-on {
+  color: var(--ym-accent) !important;
+  box-shadow: inset 0 -2px 0 var(--ym-accent);
+}
+
+html.ym-theme-on ytmusic-player-page #side-panel:has(> .ym-lyrics-panel) > #tab-renderer {
+  display: none !important;
+}
+
+html.ym-theme-on .ym-lyrics-panel {
+  flex: 1 1 0%;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px 32px;
+  box-sizing: border-box;
 }
 
 html.ym-theme-on .ym-lyrics small {
   font-size: 12px;
-  opacity: 0.5;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+/* 싱크 보정 버튼 (−/+) */
+html.ym-theme-on .ym-lyrics small button {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+  font: inherit;
+  line-height: 1;
+  cursor: pointer;
+}
+
+html.ym-theme-on .ym-lyrics small button:hover {
+  background: rgba(255, 255, 255, 0.24);
+}
+
+html.ym-theme-on .ym-lyrics small button:focus-visible {
+  outline: 2px solid var(--ym-accent);
+  outline-offset: 2px;
 }
 
 html.ym-theme-on ytmusic-description-shelf-renderer .footer {

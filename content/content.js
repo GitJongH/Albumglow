@@ -6,6 +6,9 @@
     title: 'ytmusic-player-bar .title',
     byline: 'ytmusic-player-bar .byline',
     lyricsShelf: 'ytmusic-player-page ytmusic-description-shelf-renderer',
+    playerPage: 'ytmusic-player-page', // 동영상 탭이면 video-mode 속성이 붙는다
+    sidePanel: 'ytmusic-player-page #side-panel',
+    sideTabs: 'ytmusic-player-page tp-yt-paper-tab', // 다음 트랙, 가사, 댓글, 관련 항목 순. 가사가 없으면 [1] 이 disabled
     video: 'video',
   };
 
@@ -44,12 +47,20 @@
 
   let lyricLines = null; // [{ t: 초, text }], 없으면 유튜브 원래 가사를 그대로 둔다
   let lyricKey = '';
-  let lyricHits = []; // 현재 곡의 LRCLIB 검색 결과 (시간 가사가 있는 것만)
+  let lyricHits = []; // 현재 곡의 LRCLIB 검색 결과 (가사가 있는 것만)
   let lyricHit = null;
   let activeIdx = -1;
   let pauseScrollUntil = 0;
+  // 싱크 보정(초). 양수면 가사가 그만큼 늦게 넘어간다. 곡별로 chrome.storage.local 의 `off:<곡 키>` 에 저장.
+  let lyricOffset = 0;
+  const offsetLabel = document.createElement('span');
+  const showOffset = () => { offsetLabel.textContent = ` ${lyricOffset > 0 ? '+' : ''}${lyricOffset.toFixed(1)}초 `; };
   const lyricBox = document.createElement('div');
   lyricBox.className = 'ym-lyrics';
+  // 유튜브에 가사가 없는 곡(가사 탭 회색)에서 탭 내용 자리를 대신 덮는 우리 패널
+  let panelOpen = false;
+  const lyricPanel = document.createElement('div');
+  lyricPanel.className = 'ym-lyrics-panel';
 
   // 직접 가사를 넘겨 보는 동안은 현재 줄로 끌어가지 않는다.
   // shortcut: 휠과 터치만 감지한다. 스크롤바를 끌 때도 멈추게 하려면 스크롤 컨테이너의 scroll 이벤트로 바꿀 것.
@@ -59,12 +70,23 @@
 
   // 줄을 누르면 그 위치로 이동
   lyricBox.addEventListener('click', (e) => {
+    const step = Number(e.target.dataset?.step);
+    if (step) return nudgeOffset(step);
     const line = lyricLines?.[[...lyricBox.children].indexOf(e.target)];
     const video = document.querySelector(SEL.video);
-    if (!line || !video) return;
+    if (!video || !isFinite(line?.t)) return; // 시간 정보 없는 가사는 이동할 곳이 없다
     pauseScrollUntil = 0;
-    video.currentTime = line.t;
+    video.currentTime = Math.max(0, line.t + lyricOffset);
   });
+
+  function nudgeOffset(step) {
+    lyricOffset = Math.round((lyricOffset + step) * 10) / 10;
+    showOffset();
+    const store = `off:${lyricKey}`;
+    if (lyricOffset) chrome.storage.local.set({ [store]: lyricOffset });
+    else chrome.storage.local.remove(store); // 0 으로 되돌린 곡은 남기지 않는다
+    tickLyrics();
+  }
 
   function parseLrc(lrc) {
     const out = [];
@@ -82,23 +104,42 @@
     return !duration || Math.abs(x.duration - duration) <= 2;
   }
 
+  // 한글 가사를 로마자로 옮겨 적은 것("eoryeosseul ttae ...")은 쓰지 않는다. 로마자 표기는 'eo' 가 든 낱말이
+  // 넷 중 하나꼴(측정 0.28)이고 영어·스페인어·프랑스어·독일어 가사는 0.04 이하라 0.12 로 가른다.
+  // shortcut: 한국어 로마자만 거른다. 일본어 로마자 가사가 문제 되면 기준을 따로 추가할 것.
+  function isRomanizedKorean(text) {
+    const words = text.toLowerCase().match(/[a-z']+/g) || [];
+    return words.length >= 10 && words.filter((w) => w.includes('eo')).length / words.length > 0.12;
+  }
+  console.assert(isRomanizedKorean('neo eodi geoul meoreo seoro neomu gieok eopseo deo keojyeo')
+    && !isRomanizedKorean('people say the video of someone is on the radio every single night'));
+
   async function searchLrclib(params) {
     // 곡 제목·가수만 보낸다. 쿠키와 현재 페이지 주소(referrer)는 보내지 않는다.
     const res = await fetch(`https://lrclib.net/api/search?${new URLSearchParams(params)}`, {
       credentials: 'omit',
       referrerPolicy: 'no-referrer',
     });
-    return res.ok ? (await res.json()).filter((x) => x.syncedLyrics) : [];
+    if (!res.ok) return [];
+    return (await res.json()).filter((x) => {
+      const text = x.syncedLyrics || x.plainLyrics;
+      return text && !isRomanizedKorean(text);
+    });
   }
 
   // 받아 둔 결과에서 지금 곡 길이에 맞는 가사를 고른다. 광고가 끝나 길이가 바뀌면 다시 고른다.
   function pickLyrics() {
     // 한번 고른 가사는 곡이 바뀔 때까지 유지한다: 곡 끝 무렵 유튜브가 다음 곡을 미리 이어 붙여
     // video.duration 이 늘어나므로, 그때 다시 고르면 가사가 사라진다.
-    const hit = lyricHits.includes(lyricHit) ? lyricHit : lyricHits.find(fitsDuration) || null;
+    // 시간 정보가 있는 가사를 먼저 쓰고, 없으면 일반 가사(가사 탭이 회색인 곡에서만 보여 준다)로 물러난다.
+    const kept = lyricHits.includes(lyricHit) ? lyricHit : null;
+    const fits = lyricHits.filter(fitsDuration);
+    const hit = kept?.syncedLyrics ? kept : fits.find((x) => x.syncedLyrics) || kept || fits[0] || null;
     if (hit === lyricHit) return;
     lyricHit = hit;
-    lyricLines = hit && parseLrc(hit.syncedLyrics);
+    lyricLines = hit && (hit.syncedLyrics
+      ? parseLrc(hit.syncedLyrics)
+      : hit.plainLyrics.split('\n').map((text) => ({ t: Infinity, text: text.trim() || ' ' }))); // t=Infinity: 강조·이동 없음
     renderLyrics();
     tickLyrics(); // 다음 주기를 기다리지 않고 바로 붙인다
   }
@@ -108,33 +149,86 @@
     activeIdx = -1;
     if (!lyricLines) return lyricBox.remove();
     const els = lyricLines.map((l) => Object.assign(document.createElement('p'), { textContent: l.text }));
-    lyricBox.replaceChildren(...els, Object.assign(document.createElement('small'), { textContent: '가사 싱크: LRCLIB' }));
+    const synced = !!lyricHit.syncedLyrics;
+    lyricBox.classList.toggle('plain', !synced);
+    const foot = Object.assign(document.createElement('small'), { textContent: synced ? '가사 싱크: LRCLIB' : '가사: LRCLIB' });
+    if (synced) {
+      const button = (step, text, label) => {
+        const b = Object.assign(document.createElement('button'), { type: 'button', textContent: text, ariaLabel: label, title: label });
+        b.dataset.step = step;
+        return b;
+      };
+      showOffset();
+      foot.append(' · ', button(-0.5, '−', '가사를 0.5초 빠르게'), offsetLabel, button(0.5, '+', '가사를 0.5초 늦게'));
+    }
+    lyricBox.replaceChildren(...els, foot);
   }
 
   async function refreshLyrics() {
     const title = document.querySelector(SEL.title)?.textContent.trim();
-    const artist = document.querySelector(SEL.byline)?.textContent.split('•')[0].trim() || '';
+    // 가수가 여럿이면 "A 및 B" 로 나와 검색이 안 되므로 첫 가수(링크)만 쓴다. 링크가 없으면 글자 그대로.
+    const byline = document.querySelector(SEL.byline);
+    const artists = byline?.textContent.split('•')[0].trim() || '';
+    const first = byline?.querySelector('a')?.textContent.trim();
+    const artist = first && artists.startsWith(first) ? first : artists;
     const key = settings.enabled && settings.lyrics && title ? `${title}|${artist}` : '';
     if (key === lyricKey) return;
     lyricKey = key;
     lyricHits = [];
+    lyricOffset = 0;
     pickLyrics();
     if (!key) return;
+    const store = `off:${key}`;
+    chrome.storage.local.get(store).then((saved) => {
+      if (key !== lyricKey || !saved[store]) return;
+      lyricOffset = saved[store];
+      showOffset();
+    });
     // 바로 조회하고, 첫 조회에서 맞는 가사가 나오면 곧장 띄운다. 없을 때만 넓은 검색을 한 번 더 한다.
     for (const params of [{ track_name: title, artist_name: artist }, { q: `${title} ${artist}` }]) {
       const hits = await searchLrclib(params).catch(() => []);
       if (key !== lyricKey) return;
       lyricHits = lyricHits.concat(hits);
       pickLyrics();
-      if (lyricHit) return;
+      if (lyricHit?.syncedLyrics) return;
     }
   }
 
+  // 가사를 붙일 자리를 정한다. 유튜브 가사가 있으면 그 가사 화면, 없으면(가사 탭 회색) 우리 패널.
+  function lyricsHost() {
+    const tab = document.querySelectorAll(SEL.sideTabs)[1];
+    const grey = !!tab?.hasAttribute('disabled');
+    const songMode = !document.querySelector(SEL.playerPage)?.hasAttribute('video-mode');
+    // 회색 탭은 노래 탭일 때만 살린다: 동영상은 길이·타이밍이 음원과 달라 가사가 어긋난다.
+    const live = !!lyricLines && grey && songMode;
+    panelOpen &&= live;
+    tab?.classList.toggle('ym-tab-live', live);
+    tab?.classList.toggle('ym-tab-on', panelOpen);
+    if (!panelOpen) lyricPanel.remove();
+    else if (!lyricPanel.isConnected) document.querySelector(SEL.sidePanel)?.append(lyricPanel);
+    if (live) return panelOpen ? lyricPanel : null;
+    // 가사 탭은 열 때 만들어지므로 매번 확인. 이전 곡의 가사 화면이 남아 있을 수 있어 회색이면 쓰지 않는다.
+    return lyricHit?.syncedLyrics && !grey ? document.querySelector(SEL.lyricsShelf) : null;
+  }
+
+  // 살려 둔 가사 탭을 누르면 패널을 열고, 다른 탭을 누르면 닫는다.
+  document.addEventListener('click', (e) => {
+    const tab = e.target.closest?.(SEL.sideTabs);
+    if (!tab) return;
+    panelOpen = tab.classList.contains('ym-tab-live');
+    tickLyrics();
+  }, true);
+
   function tickLyrics() {
-    const shelf = lyricLines && document.querySelector(SEL.lyricsShelf);
-    if (!shelf) return;
-    if (lyricBox.parentNode !== shelf) shelf.append(lyricBox); // 가사 탭은 열 때 만들어지므로 매번 확인
-    const t = document.querySelector(SEL.video)?.currentTime ?? 0;
+    const host = lyricsHost();
+    if (!host) return lyricBox.remove(); // 보여 줄 자리가 없으면 이전 곡 가사 화면에 남지 않게 뗀다
+    if (lyricBox.parentNode !== host) {
+      host.append(lyricBox);
+      lyricBox.children[activeIdx]?.classList.remove('active');
+      activeIdx = -1; // 새로 붙였으니 현재 줄을 다시 잡아 그 위치로 스크롤한다
+    }
+    lyricBox.classList.toggle('browsing', Date.now() < pauseScrollUntil); // 넘겨 보는 동안은 블러를 푼다
+    const t = (document.querySelector(SEL.video)?.currentTime ?? 0) - lyricOffset;
     const i = lyricLines.findLastIndex((l) => l.t <= t);
     if (i === activeIdx) return;
     lyricBox.children[activeIdx]?.classList.remove('active');
